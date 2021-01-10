@@ -1,0 +1,96 @@
+# Docker
+
+# Build a Docker image 
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+- master
+
+resources:
+- repo: self
+
+variables:
+  tag: '$(Build.BuildId)'
+  releaseTag: '$(Build.BuildNumber)'
+  x86ImageName: 'emandere/forex-import-x86'
+  armImageName: 'emandere/forex-import-arm'
+  DeploymentPath: '/home/emandere/deployments/forex-import/$(releaseTag)'
+  GitHubDeploymentPath: 'https://raw.githubusercontent.com/emandere/forex-import/master/deployment.yaml'
+  DeploymentConfigPath: '/home/emandere/deployments/forex-import/$(releaseTag)/deployment.yaml'
+
+stages:
+- stage: Build
+  displayName: Build image
+  jobs:  
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Docker@2
+      displayName: Build an x86 image
+      inputs:
+        command: buildAndPush
+        repository: $(x86ImageName)
+        dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        containerRegistry: 'dockerhub'
+        tags: |
+          $(tag)
+    - task: Docker@2
+      displayName: Build an ARM image
+      inputs:
+        command: buildAndPush
+        repository: $(armImageName)
+        dockerfile: '$(Build.SourcesDirectory)/Dockerfile.arm'
+        containerRegistry: 'dockerhub'
+        tags: |
+          $(tag)
+          
+- stage: Deploy
+  jobs:
+    # track deployments on the environment
+  - deployment: WSL_Linux
+    pool:
+      name: LocalLinux
+    # creates an environment if it doesn’t exist
+    environment: 'forex-import'
+    strategy:
+      # default deployment strategy
+      runOnce:
+        deploy:
+          steps:
+            - bash: |
+                # Write your commands here
+
+                echo $(releaseTag)
+
+                sudo mkdir -p $(DeploymentPath)
+                
+                sudo rm -f $(DeploymentPath)/*
+                
+                sudo chmod 775 $(DeploymentPath)
+                
+                sudo wget -q $(GitHubDeploymentPath) -P  $(DeploymentPath)
+                
+                sudo sed -i 's/{platform}/x86/'  $(DeploymentConfigPath)
+                
+                sudo sed -i 's/{buildId}/$(Build.BuildId)/'  $(DeploymentConfigPath)
+               
+               
+              displayName: 'Set up artifacts'
+
+            - bash: |
+                # Write your commands here
+           
+                sudo k3s kubectl apply -f  $(DeploymentConfigPath)
+              
+              displayName: 'Deploy Release'
+            - bash: |
+                # Write your commands here
+         
+                sudo k3s kubectl rollout status deployment.v1.apps/forex-import
+            
+              displayName: 'Verify Release'
+
+
+            
