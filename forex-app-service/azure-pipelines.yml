@@ -1,0 +1,220 @@
+# Docker
+
+# Build a Docker image 
+# https://docs.microsoft.com/azure/devops/pipelines/languages/docker
+
+trigger:
+- master
+
+
+resources:
+- repo: self
+
+variables:
+  tag: '$(Build.BuildId)'
+  releaseTag: '$(Build.BuildNumber)'
+  serviceName: 'forex-app-service'
+  serviceNameFrontEnd: 'forex-app-service-frontend'
+  x86ImageName: 'emandere/$(serviceName)-x86'
+  armImageName: 'emandere/$(serviceName)-arm'
+
+  DeploymentPath: '/home/emandere/deployments/$(serviceName)/$(releaseTag)'
+  GitHubDeploymentPath: 'https://raw.githubusercontent.com/emandere/$(serviceName)/master/deployment.yaml'
+  DeploymentConfigPath: '/home/emandere/deployments/$(serviceName)/$(releaseTag)/deployment.yaml'
+
+  DeploymentPathFrontEnd: '/home/emandere/deployments/$(serviceNameFrontEnd)/$(releaseTag)'
+  GitHubDeploymentPathFrontEnd: 'https://raw.githubusercontent.com/emandere/$(serviceName)/master/deployment.frontend.yaml'
+  DeploymentConfigPathFrontEnd: '/home/emandere/deployments/$(serviceNameFrontEnd)/$(releaseTag)/deployment.frontend.yaml'
+
+stages:
+- stage: Build
+  displayName: Build image
+  jobs:  
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Docker@2
+      displayName: Build an x86 image
+      inputs:
+        command: buildAndPush
+        repository: $(x86ImageName)
+        dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        containerRegistry: 'dockerhub'
+        tags: |
+          $(tag)
+    - task: Docker@2
+      displayName: Build an ARM image
+      inputs:
+        command: buildAndPush
+        repository: $(armImageName)
+        dockerfile: '$(Build.SourcesDirectory)/Dockerfile.arm'
+        containerRegistry: 'dockerhub'
+        tags: |
+          $(tag)
+- stage: Deploy
+  jobs:
+    # track deployments on the environment
+  - deployment: WSL_Linux
+    pool:
+      name: LocalLinux
+    # creates an environment if it doesn’t exist
+    environment: '$(serviceName)'
+    strategy:
+      # default deployment strategy
+      runOnce:
+        deploy:
+          steps:
+            - bash: |
+                # Write your commands here
+
+                echo $(releaseTag)
+
+                sudo mkdir -p $(DeploymentPath)
+                
+                sudo rm -f $(DeploymentPath)/*
+                
+                sudo chmod 775 $(DeploymentPath)
+                
+                sudo wget -q $(GitHubDeploymentPath) -P  $(DeploymentPath)
+                
+                sudo sed -i 's/{platform}/x86/'  $(DeploymentConfigPath)
+
+                sudo sed -i 's/fxaccount/fxpracticeaccount/'  $(DeploymentConfigPath)
+                
+                sudo sed -i 's/{buildId}/$(Build.BuildId)/'  $(DeploymentConfigPath)
+                
+                
+              displayName: 'Set up artifacts'
+
+            - bash: |
+                # Write your commands here
+            
+                sudo k3s kubectl apply -f  $(DeploymentConfigPath)
+              
+              displayName: 'Deploy Release'
+            - bash: |
+                # Write your commands here
+          
+                sudo k3s kubectl rollout status deployment.v1.apps/$(serviceName)
+            
+              displayName: 'Verify Release'
+
+  - deployment: AWS_ARM
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: '$(serviceName)'
+    strategy:
+      # default deployment strategy
+      runOnce:
+        deploy:
+          steps:
+            - task: SSH@0
+              displayName: 'Set up release artifacts'
+              inputs:
+                sshEndpoint: 'aws-arm'
+                commands: |
+                  mkdir -p $(DeploymentPath)
+                  
+                  rm -f $(DeploymentPath)/*
+                  
+                  chmod 775 $(DeploymentPath)
+                  
+                  wget -q $(GitHubDeploymentPath) -P  $(DeploymentPath)
+                  
+                  sed -i 's/{platform}/arm/'  $(DeploymentConfigPath)
+                  
+                  sed -i 's/{buildId}/$(Build.BuildId)/'  $(DeploymentConfigPath)
+            - task: SSH@0
+              displayName: 'Deploy new release'
+              inputs:
+                sshEndpoint: 'aws-arm'
+                commands: 'k3s kubectl apply -f  $(DeploymentConfigPath)'
+            - task: SSH@0
+              displayName: 'Verify Release'
+              inputs:
+                sshEndpoint: 'aws-arm'
+                commands: 'k3s kubectl rollout status deployment.v1.apps/$(serviceName)'
+
+  - deployment: WSL_Linux_FrontEnd
+    pool:
+      name: LocalLinux
+    # creates an environment if it doesn’t exist
+    environment: '$(serviceName)'
+    strategy:
+      # default deployment strategy
+      runOnce:
+        deploy:
+          steps:
+            - bash: |
+                # Write your commands here
+
+                echo $(releaseTag)
+
+                sudo mkdir -p $(DeploymentPathFrontEnd)
+                
+                sudo rm -f $(DeploymentPathFrontEnd)/*
+                
+                sudo chmod 775 $(DeploymentPathFrontEnd)
+                
+                sudo wget -q $(GitHubDeploymentPathFrontEnd) -P  $(DeploymentPathFrontEnd)
+                
+                sudo sed -i 's/{platform}/x86/'  $(DeploymentConfigPathFrontEnd)
+
+                sudo sed -i 's/fxaccount/fxpracticeaccount/'  $(DeploymentConfigPathFrontEnd)
+                
+                sudo sed -i 's/{buildId}/$(Build.BuildId)/'  $(DeploymentConfigPathFrontEnd)
+                
+                
+              displayName: 'Set up artifacts'
+
+            - bash: |
+                # Write your commands here
+            
+                sudo k3s kubectl apply -f  $(DeploymentConfigPathFrontEnd)
+              
+              displayName: 'Deploy Release'
+            - bash: |
+                # Write your commands here
+          
+                sudo k3s kubectl rollout status deployment.v1.apps/$(serviceNameFrontEnd)
+            
+              displayName: 'Verify Release'
+                                
+  - deployment: AWS_ARM_Frontend
+    pool:
+      vmImage: 'ubuntu-latest'
+    environment: '$(serviceName)'
+    strategy:
+      # default deployment strategy
+      runOnce:
+        deploy:
+          steps:
+            - task: SSH@0
+              displayName: 'Set up release artifacts'
+              inputs:
+                sshEndpoint: 'aws-arm'
+                commands: |
+                  mkdir -p $(DeploymentPathFrontEnd)
+                  
+                  rm -f $(DeploymentPathFrontEnd)/*
+                  
+                  chmod 775 $(DeploymentPathFrontEnd)
+                  
+                  wget -q $(GitHubDeploymentPathFrontEnd) -P  $(DeploymentPathFrontEnd)
+                  
+                  sed -i 's/{platform}/arm/'  $(DeploymentConfigPathFrontEnd)
+                  
+                  sed -i 's/{buildId}/$(Build.BuildId)/'  $(DeploymentConfigPathFrontEnd)
+            - task: SSH@0
+              displayName: 'Deploy new release'
+              inputs:
+                sshEndpoint: 'aws-arm'
+                commands: 'k3s kubectl apply -f  $(DeploymentConfigPathFrontEnd)'
+            - task: SSH@0
+              displayName: 'Verify Release'
+              inputs:
+                sshEndpoint: 'aws-arm'
+                commands: 'k3s kubectl rollout status deployment.v1.apps/$(serviceNameFrontEnd)'
+                      
